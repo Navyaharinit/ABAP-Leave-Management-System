@@ -1,0 +1,936 @@
+PROGRAM z130_leave.
+
+TABLES: z130_leave_req,
+        z130_leave_bale.
+
+"Screen 0100 field
+DATA: gv_emp         TYPE z130_leave_req-emp_number,
+      gv_empnum      TYPE z130_emp_master-emp_number,
+      gv_reqid       TYPE z130_leave_req-req_id,
+      gv_bal         TYPE z130_leave_bale-remaining,
+      gv_status_text TYPE char50,
+      gt_leave_req   TYPE TABLE OF z130_leave_req,
+      gt_leave_bal   TYPE TABLE OF z130_leave_bale.
+
+" ALV objects
+DATA: go_cont_req TYPE REF TO cl_gui_custom_container,
+      go_grid_req TYPE REF TO cl_gui_alv_grid,
+      go_alv_bal  TYPE REF TO cl_gui_alv_grid,
+      go_cont_bal TYPE REF TO cl_gui_custom_container,
+      go_grid_bal TYPE REF TO cl_gui_alv_grid.
+
+DATA: go_container_req TYPE REF TO cl_gui_custom_container,
+      go_alv_req       TYPE REF TO cl_gui_alv_grid,
+      gs_leave_req     TYPE z130_leave_req.
+
+" Internal tables
+DATA: gt_emp TYPE TABLE OF z130_emp_master,
+      gs_emp TYPE z130_emp_master,
+      gt_req TYPE TABLE OF z130_leave_req,
+      gs_req TYPE z130_leave_req.
+
+DATA: gt_bal TYPE TABLE OF z130_leave_bale,
+      gs_bal TYPE z130_leave_bale.
+
+DATA: lv_row   TYPE lvc_s_row.
+DATA: ok_code  TYPE sy-ucomm.
+
+DATA: gv_disp_status  TYPE z130_leave_req-status,
+      gv_disp_reqid   TYPE z130_leave_req-req_id,
+      gv_disp_empnum  TYPE z130_leave_req-emp_number,
+      gv_disp_balance TYPE z130_leave_bale-remaining.
+
+DATA: go_container_history TYPE REF TO cl_gui_custom_container,
+      go_alv_history       TYPE REF TO cl_gui_alv_grid,
+      gt_leave_history     TYPE TABLE OF z130_leave_req,
+      gs_leave_history     TYPE z130_leave_req.
+
+DATA: z130_emp_master_tab TYPE TABLE OF z130_emp_master,
+      lt_return           TYPE TABLE OF ddshretval,
+      ls_return           TYPE ddshretval.
+
+DATA: gs_sf_data TYPE z130_sf_data.
+
+" >>> Added for SmartForm PDF attachment
+DATA: gv_pdf_xstring TYPE xstring.
+" <<< Added for SmartForm PDF attachment
+
+
+*&---------------------------------------------------------------------*
+*&      Module  status_0100  OUTPUT
+*&---------------------------------------------------------------------*
+MODULE status_0100 OUTPUT.
+  SET PF-STATUS 'S100'.
+  SET TITLEBAR 'T100'.
+ENDMODULE.
+
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_0100  INPUT
+*&---------------------------------------------------------------------*
+MODULE user_command_0100 INPUT.
+
+  ok_code = sy-ucomm.
+
+  CASE ok_code.
+
+    WHEN 'REQ'.
+      gv_empnum = gv_emp.
+      PERFORM show_leave_requests.
+
+    WHEN 'BAL'.
+      gv_empnum = gv_emp.
+      PERFORM show_leave_balance.
+
+    WHEN 'HIST'.
+      gv_empnum = gv_emp.
+      CALL SCREEN 500.
+
+    WHEN 'BACK' OR 'EXIT' OR 'CANCEL'.
+      LEAVE PROGRAM.
+
+    WHEN OTHERS.
+
+  ENDCASE.
+  CLEAR ok_code.
+
+ENDMODULE.
+
+
+
+*&---------------------------------------------------------------------*
+*&      Form  SHOW_LEAVE_REQUESTS
+*&---------------------------------------------------------------------*
+FORM show_leave_requests .
+
+  CLEAR gt_leave_req.
+
+  IF gv_empnum IS INITIAL.
+
+    SELECT *
+      FROM z130_leave_req
+      INTO TABLE gt_leave_req.
+
+  ELSE.
+
+    SELECT *
+      FROM z130_leave_req
+      INTO TABLE gt_leave_req
+      WHERE emp_number = gv_empnum.
+
+  ENDIF.
+
+  IF go_container_req IS INITIAL.
+    CREATE OBJECT go_container_req
+      EXPORTING container_name = 'CC_REQ'.
+
+    CREATE OBJECT go_alv_req
+      EXPORTING i_parent = go_container_req.
+  ENDIF.
+
+  " Build ALV with filtered internal table
+  PERFORM build_alv_req.
+
+  CALL SCREEN 0200.
+
+ENDFORM.
+
+
+
+*&---------------------------------------------------------------------*
+*&      Form  SHOW_LEAVE_BALANCE
+*&---------------------------------------------------------------------*
+FORM show_leave_balance.
+
+  CLEAR gt_bal.
+
+  IF gv_empnum IS INITIAL.
+    "Show ALL employees
+    SELECT *
+      FROM z130_leave_bale
+      INTO TABLE gt_bal.
+  ELSE.
+    "Show ONE employee
+    SELECT *
+      FROM z130_leave_bale
+      INTO TABLE gt_bal
+      WHERE emp_number = gv_empnum.
+  ENDIF.
+
+  CALL SCREEN 0400.
+
+ENDFORM.
+
+
+*&---------------------------------------------------------------------*
+*&      Module  STATUS_0200  OUTPUT
+*&---------------------------------------------------------------------*
+MODULE status_0200 OUTPUT.
+  SET PF-STATUS 'S200'.
+  SET TITLEBAR 'T200'.
+
+  IF go_container_req IS INITIAL.
+    CREATE OBJECT go_container_req
+      EXPORTING
+        container_name = 'CC_REQ'.
+
+    CREATE OBJECT go_alv_req
+      EXPORTING
+        i_parent = go_container_req.
+
+    PERFORM build_alv_req.
+  ELSE.
+    CALL METHOD go_alv_req->refresh_table_display.
+  ENDIF.
+ENDMODULE.
+
+*&---------------------------------------------------------------------*
+*&      Form  BUILD_ALV_REQ
+*&---------------------------------------------------------------------*
+FORM build_alv_req .
+
+  DATA: lt_fieldcat TYPE lvc_t_fcat,
+        ls_fieldcat TYPE lvc_s_fcat.
+
+  "Create field catalog
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'REQ_ID'.
+  ls_fieldcat-coltext   = 'Request ID'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'EMP_NUMBER'.
+  ls_fieldcat-coltext   = 'Employee'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'LEAVE_TYPE'.
+  ls_fieldcat-coltext   = 'Type'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'START_DATE'.
+  ls_fieldcat-coltext   = 'Start Date'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'END_DATE'.
+  ls_fieldcat-coltext   = 'End Date'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'TOTAL_DAYS'.
+  ls_fieldcat-coltext   = 'Days'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'STATUS'.
+  ls_fieldcat-coltext   = 'Status'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CALL METHOD go_alv_req->set_table_for_first_display
+    EXPORTING
+      i_structure_name = 'Z130_LEAVE_REQ'
+    CHANGING
+      it_outtab        = gt_leave_req
+      it_fieldcatalog  = lt_fieldcat.
+
+  CALL METHOD go_alv_req->refresh_table_display.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_0200  INPUT
+*&---------------------------------------------------------------------*
+MODULE user_command_0200 INPUT.
+
+  DATA: lt_rows TYPE lvc_t_row.
+
+  CASE sy-ucomm.
+
+    WHEN 'APP'.   "Approve
+      CALL METHOD go_alv_req->get_selected_rows
+        IMPORTING
+          et_index_rows = lt_rows.
+
+      READ TABLE lt_rows INTO lv_row INDEX 1.
+      IF sy-subrc EQ 0.
+        READ TABLE gt_leave_req INTO gs_leave_req INDEX lv_row-index.
+        PERFORM approve_request USING gs_leave_req.
+      ELSE.
+        MESSAGE 'Please select a row to approve' TYPE 'I'.
+      ENDIF.
+
+    WHEN 'REJ'.   "Reject
+      CALL METHOD go_alv_req->get_selected_rows
+        IMPORTING
+          et_index_rows = lt_rows.
+
+      READ TABLE lt_rows INTO lv_row INDEX 1.
+      IF sy-subrc EQ 0.
+        READ TABLE gt_leave_req INTO gs_leave_req INDEX lv_row-index.
+        PERFORM reject_request USING gs_leave_req.
+      ELSE.
+        MESSAGE 'Please select a row to reject' TYPE 'I'.
+      ENDIF.
+
+    WHEN 'BACK'.
+      LEAVE TO SCREEN 0100.
+
+  ENDCASE.
+
+ENDMODULE.
+
+*&---------------------------------------------------------------------*
+*&      Form  APPROVE_REQUEST
+*&---------------------------------------------------------------------*
+FORM approve_request USING ps_req TYPE z130_leave_req.
+
+  DATA: ls_bal      TYPE z130_leave_bale,
+        ls_req      TYPE z130_leave_req,
+        lv_text     TYPE string,
+        lv_answer   TYPE c,
+        lv_mail_ans TYPE c,
+        lt_rows     TYPE lvc_t_row,
+        lv_row      TYPE lvc_s_row.
+
+*------------------------------------------------------------------*
+* 1️⃣ Get selected row index in ALV
+*------------------------------------------------------------------*
+  CALL METHOD go_alv_req->get_selected_rows
+    IMPORTING
+      et_index_rows = lt_rows.
+
+  READ TABLE lt_rows INTO lv_row INDEX 1.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Please select a row to approve' TYPE 'I'.
+    RETURN.
+  ENDIF.
+
+*------------------------------------------------------------------*
+* 2️⃣ Update request status → Approved
+*------------------------------------------------------------------*
+  UPDATE z130_leave_req
+     SET status = 'A'
+   WHERE req_id = ps_req-req_id.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Error updating request status!' TYPE 'E'.
+    EXIT.
+  ENDIF.
+
+*------------------------------------------------------------------*
+* 3️⃣ Fetch balance from DB
+*------------------------------------------------------------------*
+  SELECT SINGLE *
+    INTO ls_bal
+    FROM z130_leave_bale
+    WHERE emp_number = ps_req-emp_number
+      AND leave_type = ps_req-leave_type.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Leave balance not found!' TYPE 'E'.
+    EXIT.
+  ENDIF.
+
+*------------------------------------------------------------------*
+* 4️⃣ Update Used & Remaining
+*------------------------------------------------------------------*
+  ls_bal-used      = ls_bal-used + ps_req-total_days.
+  ls_bal-remaining = ls_bal-remaining - ps_req-total_days.
+
+  UPDATE z130_leave_bale FROM ls_bal.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Error updating leave balance check remaining balance leaves!' TYPE 'E'.
+    EXIT.
+  ENDIF.
+
+*------------------------------------------------------------------*
+* 5️⃣ Read updated request from DB
+*------------------------------------------------------------------*
+  SELECT SINGLE *
+    INTO ls_req
+    FROM z130_leave_req
+    WHERE req_id = ps_req-req_id.
+
+*------------------------------------------------------------------*
+* 6️⃣ Fill SCREEN variables
+*------------------------------------------------------------------*
+  gv_reqid        = ls_req-req_id.
+  gv_empnum       = ls_req-emp_number.
+  gv_bal          = ls_bal-remaining.
+  gv_status_text  = 'Leave Request Approved Successfully'.
+  gv_disp_status  = ls_req-status.
+  gv_disp_reqid   = ls_req-req_id.
+  gv_disp_empnum  = ls_req-emp_number.
+  gv_disp_balance = ls_bal-remaining.
+
+*------------------------------------------------------------------*
+* 7️⃣ Popup → Leave Approved
+*------------------------------------------------------------------*
+  lv_text = |Leave Approved for the Employee | &&
+            |Remaining Balance: { ls_bal-remaining }|.
+
+  CALL FUNCTION 'POPUP_TO_CONFIRM'
+    EXPORTING
+      titlebar              = 'Leave Approved'
+      text_question         = lv_text
+      text_button_1         = 'Continue'
+      text_button_2         = 'Cancel'
+      default_button        = '1'
+      display_cancel_button = ' '
+    IMPORTING
+      answer                = lv_answer.
+
+  IF lv_answer = '1'.
+    DATA: lv_action TYPE c.
+
+    CALL FUNCTION 'POPUP_TO_CONFIRM'
+      EXPORTING
+        titlebar      = 'Confirmation Options'
+        text_question = 'Choose how you want to proceed'
+        text_button_1 = 'Email'
+        text_button_2 = 'SmartForm'
+      IMPORTING
+        answer        = lv_action.
+
+    IF lv_action = '1'.
+      PERFORM call_smartform.
+      PERFORM send_leave_email.
+    ELSEIF lv_action = '2'.
+      PERFORM call_smartform.
+    ENDIF.
+
+    " ------------------------
+    " Move approved request to history
+    " ------------------------
+    APPEND ls_req TO gt_leave_history.
+
+    " Remove approved row from pending requests ALV
+    DELETE gt_leave_req INDEX lv_row-index.
+
+    " Refresh ALV display
+    CALL METHOD go_alv_req->refresh_table_display.
+
+    " Return to Screen 200 ALV
+    CALL SCREEN 200.
+
+  ELSE.
+    RETURN.  "Cancel → Stay on ALV
+  ENDIF.
+
+ENDFORM.
+
+
+
+*&---------------------------------------------------------------------*
+*&      Form  REJECT_REQUEST
+*&---------------------------------------------------------------------*
+FORM reject_request USING ps_req TYPE z130_leave_req.
+
+  DATA: ls_req      TYPE z130_leave_req,
+        lv_text     TYPE string,
+        lv_answer   TYPE c,
+        lv_mail_ans TYPE c,
+        lt_rows     TYPE lvc_t_row,
+        lv_row      TYPE lvc_s_row.
+
+*------------------------------------------------------------------*
+* 1️⃣ Get selected row index in ALV
+*------------------------------------------------------------------*
+  CALL METHOD go_alv_req->get_selected_rows
+    IMPORTING
+      et_index_rows = lt_rows.
+
+  READ TABLE lt_rows INTO lv_row INDEX 1.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Please select a row to reject' TYPE 'I'.
+    RETURN.
+  ENDIF.
+
+*------------------------------------------------------------------*
+* 2️⃣ Update request status → Rejected
+*------------------------------------------------------------------*
+  UPDATE z130_leave_req
+     SET status = 'R'
+   WHERE req_id = ps_req-req_id.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Error rejecting leave request!' TYPE 'E'.
+    EXIT.
+  ENDIF.
+
+*------------------------------------------------------------------*
+* 3️⃣ Read UPDATED request from DB
+*------------------------------------------------------------------*
+  SELECT SINGLE *
+    INTO ls_req
+    FROM z130_leave_req
+    WHERE req_id = ps_req-req_id.
+
+*------------------------------------------------------------------*
+* 4️⃣ Fill SCREEN variables
+*------------------------------------------------------------------*
+  gv_reqid        = ls_req-req_id.
+  gv_empnum       = ls_req-emp_number.
+  gv_bal          = 0.
+  gv_status_text  = 'Leave Request Rejected Successfully'.
+  gv_disp_status  = ls_req-status.
+  gv_disp_reqid   = ls_req-req_id.
+  gv_disp_empnum  = ls_req-emp_number.
+  gv_disp_balance = 0.
+
+*------------------------------------------------------------------*
+* 5️⃣ Popup → Leave Rejected
+*------------------------------------------------------------------*
+  lv_text = |Leave Rejected for Employee { ls_req-emp_number }|.
+
+  CALL FUNCTION 'POPUP_TO_CONFIRM'
+    EXPORTING
+      titlebar              = 'Leave Rejected'
+      text_question         = lv_text
+      text_button_1         = 'Continue'
+      text_button_2         = 'Cancel'
+      default_button        = '1'
+      display_cancel_button = ' '
+    IMPORTING
+      answer                = lv_answer.
+
+  IF lv_answer = '1'.
+    DATA: lv_action TYPE c.
+
+    CALL FUNCTION 'POPUP_TO_CONFIRM'
+      EXPORTING
+        titlebar      = 'Confirmation Options'
+        text_question = 'Choose how you want to proceed'
+        text_button_1 = 'Email'
+        text_button_2 = 'SmartForm'
+      IMPORTING
+        answer        = lv_action.
+
+    IF lv_action = '1'.
+      PERFORM call_smartform.
+      PERFORM send_leave_email.
+    ELSEIF lv_action = '2'.
+      PERFORM call_smartform.
+    ENDIF.
+
+    " ------------------------
+    " Move rejected request to history
+    " ------------------------
+    APPEND ls_req TO gt_leave_history.
+
+    " Remove rejected row from pending requests ALV
+    DELETE gt_leave_req INDEX lv_row-index.
+
+    " Refresh ALV display
+    CALL METHOD go_alv_req->refresh_table_display.
+
+    " Return to Screen 200 ALV
+    CALL SCREEN 200.
+
+  ELSE.
+    RETURN.  "Cancel → Stay on ALV
+  ENDIF.
+
+ENDFORM.
+
+
+
+*&---------------------------------------------------------------------*
+*&      Module  STATUS_0400  OUTPUT
+*&---------------------------------------------------------------------*
+MODULE status_0400 OUTPUT.
+
+  SET PF-STATUS 'S400'.
+  SET TITLEBAR 'T400'.
+
+  IF go_cont_bal IS INITIAL.
+
+    CREATE OBJECT go_cont_bal
+      EXPORTING container_name = 'CC_BAL'.
+
+    CREATE OBJECT go_alv_bal
+      EXPORTING i_parent = go_cont_bal.
+
+    PERFORM build_alv_bal.
+
+  ELSE.
+    CALL METHOD go_alv_bal->refresh_table_display.
+  ENDIF.
+
+ENDMODULE.
+
+*&---------------------------------------------------------------------*
+*&      Form  BUILD_ALV_BAL
+*&---------------------------------------------------------------------*
+FORM build_alv_bal.
+
+  DATA: lt_fieldcat TYPE lvc_t_fcat,
+        ls_fieldcat TYPE lvc_s_fcat.
+
+  "Employee Number
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'EMP_NUMBER'.
+  ls_fieldcat-coltext   = 'Employee Number'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  "Leave Type
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'LEAVE_TYPE'.
+  ls_fieldcat-coltext   = 'Leave Type'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  "Entitled
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'ENTITLED'.
+  ls_fieldcat-coltext   = 'Entitled'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  "Used
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'USED'.
+  ls_fieldcat-coltext   = 'Used'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  "Remaining
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'REMAINING'.
+  ls_fieldcat-coltext   = 'Remaining'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  "Last Update
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'LAST_UPDATE'.
+  ls_fieldcat-coltext   = 'Last Updated'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CALL METHOD go_alv_bal->set_table_for_first_display
+    EXPORTING
+      i_structure_name = 'Z130_LEAVE_BALE'
+    CHANGING
+      it_fieldcatalog = lt_fieldcat
+      it_outtab       = gt_bal.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_0400  INPUT
+*&---------------------------------------------------------------------*
+MODULE user_command_0400 INPUT.
+
+  CASE sy-ucomm.
+
+    WHEN 'BACK'.
+      LEAVE TO SCREEN 0100.   "Go back to main screen
+
+    WHEN 'EXIT' OR 'CANCEL'.
+      LEAVE PROGRAM.
+
+  ENDCASE.
+
+  CLEAR sy-ucomm.
+
+ENDMODULE.
+
+
+*&---------------------------------------------------------------------*
+*&      Form  SEND_LEAVE_EMAIL
+*&---------------------------------------------------------------------*
+FORM send_leave_email.
+
+  DATA: lo_send    TYPE REF TO cl_bcs,
+        lo_doc     TYPE REF TO cl_document_bcs,
+        lo_rec     TYPE REF TO if_recipient_bcs,
+        lt_text    TYPE soli_tab,
+        ls_text    TYPE soli,
+        lt_pdf_hex TYPE solix_tab,
+        lv_len     TYPE so_obj_len.
+
+  "---------------------------
+  " Email body
+  "---------------------------
+  CLEAR ls_text.
+  ls_text-line = |Leave request processed for Employee { gv_empnum }.|.
+  APPEND ls_text TO lt_text.
+
+  "---------------------------
+  " Create persistent email
+  "---------------------------
+  lo_send = cl_bcs=>create_persistent( ).
+  lo_send->set_send_immediately( 'X' ).
+
+  "---------------------------
+  " Set sender (must be valid)
+  "---------------------------
+  lo_send->set_sender(
+    cl_cam_address_bcs=>create_internet_address( 'navya1n@cmich.edu' ) ).
+
+  "---------------------------
+  " Create document
+  "---------------------------
+  lo_doc = cl_document_bcs=>create_document(
+             i_type    = 'RAW'
+             i_text    = lt_text
+             i_subject = 'Leave Request Confirmation' ).
+
+  "---------------------------
+  " Attach PDF (if generated)
+  "---------------------------
+  IF gv_pdf_xstring IS NOT INITIAL.
+
+    CALL FUNCTION 'SCMS_XSTRING_TO_BINARY'
+      EXPORTING
+        buffer     = gv_pdf_xstring
+      TABLES
+        binary_tab = lt_pdf_hex.
+
+    lv_len = xstrlen( gv_pdf_xstring ).
+
+    lo_doc->add_attachment(
+      EXPORTING
+        i_attachment_type    = 'PDF'
+        i_attachment_subject = |Leave_Document_{ gv_reqid }|
+        i_attachment_size    = lv_len
+        i_att_content_hex    = lt_pdf_hex ).
+  ENDIF.
+
+  lo_send->set_document( lo_doc ).
+
+  "---------------------------
+  " Valid recipient (required for SOST)
+  "---------------------------
+  lo_rec = cl_cam_address_bcs=>create_internet_address( 'teeda1n@cmich.edu' ).
+  lo_send->add_recipient( lo_rec ).
+
+  "---------------------------
+  " Send email properly
+  "---------------------------
+  TRY.
+      lo_send->send( ).
+      COMMIT WORK.
+      MESSAGE 'Email triggered successfully and visible in SOST!' TYPE 'S'.
+    CATCH cx_send_req_bcs INTO DATA(lx_bcs).
+      MESSAGE lx_bcs->get_text( ) TYPE 'E'.
+  ENDTRY.
+
+ENDFORM.
+
+
+*&---------------------------------------------------------------------*
+*&      Module  STATUS_0500  OUTPUT
+*&---------------------------------------------------------------------*
+MODULE status_0500 OUTPUT.
+
+  SET PF-STATUS 'S500'.
+  SET TITLEBAR 'T500'.
+
+  " Create container & ALV if not already
+  IF go_container_history IS INITIAL.
+    CREATE OBJECT go_container_history
+      EXPORTING container_name = 'CC_HISTORY'.
+
+    CREATE OBJECT go_alv_history
+      EXPORTING i_parent = go_container_history.
+
+    " Build field catalog and display ALV first time
+    PERFORM build_alv_history.
+  ENDIF.
+
+  " Refresh data from table each time screen opens
+  PERFORM refresh_alv_history.
+
+ENDMODULE.
+
+
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_0500  INPUT
+*&---------------------------------------------------------------------*
+MODULE user_command_0500 INPUT.
+
+  CASE sy-ucomm.
+    WHEN 'BACK'.
+      LEAVE TO SCREEN 0100.
+    WHEN 'EXIT' OR 'CANCEL'.
+      LEAVE PROGRAM.
+  ENDCASE.
+
+  CLEAR sy-ucomm.
+
+ENDMODULE.
+
+
+
+*&---------------------------------------------------------------------*
+*&      Form  BUILD_ALV_HISTORY
+*&---------------------------------------------------------------------*
+FORM build_alv_history .
+
+  DATA: lt_fieldcat TYPE lvc_t_fcat,
+        ls_fieldcat TYPE lvc_s_fcat.
+
+  " Fields
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'REQ_ID'.
+  ls_fieldcat-coltext = 'Request ID'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'EMP_NUMBER'.
+  ls_fieldcat-coltext = 'Employee'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'LEAVE_TYPE'.
+  ls_fieldcat-coltext = 'Leave Type'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'START_DATE'.
+  ls_fieldcat-coltext = 'Start Date'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'END_DATE'.
+  ls_fieldcat-coltext = 'End Date'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'TOTAL_DAYS'.
+  ls_fieldcat-coltext = 'Days'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'STATUS'.
+  ls_fieldcat-coltext = 'Status'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  " Display ALV
+  CALL METHOD go_alv_history->set_table_for_first_display
+    EXPORTING
+      i_structure_name = 'Z130_LEAVE_REQ'
+    CHANGING
+      it_outtab       = gt_leave_req
+      it_fieldcatalog = lt_fieldcat.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  REFRESH_ALV_HISTORY
+*&---------------------------------------------------------------------*
+FORM refresh_alv_history.
+
+  CLEAR gt_leave_req.
+
+  " ✅ If employee number entered → show ONLY that employee
+  IF gv_empnum IS INITIAL.
+    SELECT *
+      FROM z130_leave_req
+      INTO TABLE gt_leave_req
+      ORDER BY req_id DESCENDING.
+  ELSE.
+    SELECT *
+      FROM z130_leave_req
+      INTO TABLE gt_leave_req
+      WHERE emp_number = gv_empnum
+      ORDER BY req_id DESCENDING.
+  ENDIF.
+
+  " Refresh ALV display
+  IF go_alv_history IS NOT INITIAL.
+    CALL METHOD go_alv_history->refresh_table_display.
+  ENDIF.
+
+ENDFORM.
+
+
+*&---------------------------------------------------------------------*
+*&      Form  CALL_SMARTFORM
+*&---------------------------------------------------------------------*
+FORM call_smartform.
+
+  DATA: lv_fm_name    TYPE rs38l_fnam,
+        ls_ctrlop     TYPE ssfctrlop,
+        ls_compop     TYPE ssfcompop,
+        ls_job_output TYPE ssfcrescl,
+        lt_pdf_lines  TYPE soli_tab.
+
+  " Fetch Request Data
+  SELECT SINGLE *
+    INTO gs_req
+    FROM z130_leave_req
+    WHERE req_id = gv_reqid.
+
+  SELECT SINGLE *
+    INTO gs_bal
+    FROM z130_leave_bale
+    WHERE emp_number = gs_req-emp_number
+      AND leave_type = gs_req-leave_type.
+
+  " Fill SmartForm Structure
+  gs_sf_data-req_id      = gs_req-req_id.
+  gs_sf_data-emp_number  = gs_req-emp_number.
+  gs_sf_data-leave_type  = gs_req-leave_type.
+  gs_sf_data-start_date  = gs_req-start_date.
+  gs_sf_data-end_date    = gs_req-end_date.
+  gs_sf_data-total_days  = gs_req-total_days.
+  gs_sf_data-status      = gs_req-status.
+  gs_sf_data-created_on  = gs_req-created_on.
+  gs_sf_data-entitled    = gs_bal-entitled.
+  gs_sf_data-used        = gs_bal-used.
+  gs_sf_data-remaining   = gs_bal-remaining.
+
+  " Get SmartForm Function Module
+  CALL FUNCTION 'SSF_FUNCTION_MODULE_NAME'
+    EXPORTING
+      formname = 'Z130_SF_LEAVEDOC'
+    IMPORTING
+      fm_name  = lv_fm_name.
+
+  " Control parameters to capture OTF (needed for PDF)
+  CLEAR: ls_ctrlop, ls_compop, ls_job_output, gv_pdf_xstring.
+  ls_ctrlop-no_dialog = 'X'.
+  ls_ctrlop-getotf    = 'X'.
+  ls_ctrlop-preview   = ' '.
+
+  " Call SmartForm and capture OTF
+  CALL FUNCTION lv_fm_name
+    EXPORTING
+      control_parameters = ls_ctrlop
+      output_options     = ls_compop
+      user_settings      = ' '
+      is_data            = gs_sf_data
+    IMPORTING
+      job_output_info    = ls_job_output
+    EXCEPTIONS
+      formatting_error   = 1
+      internal_error     = 2
+      send_error         = 3
+      user_canceled      = 4
+      OTHERS             = 5.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'SmartForm generation failed!' TYPE 'E'.
+    EXIT.
+  ENDIF.
+
+  " Convert OTF -> PDF (XSTRING)
+  CALL FUNCTION 'CONVERT_OTF'
+    EXPORTING
+      format   = 'PDF'
+    IMPORTING
+      bin_file = gv_pdf_xstring
+    TABLES
+      otf      = ls_job_output-otfdata
+      lines    = lt_pdf_lines
+    EXCEPTIONS
+      OTHERS   = 1.
+
+  IF sy-subrc <> 0 OR gv_pdf_xstring IS INITIAL.
+    MESSAGE 'PDF conversion failed!' TYPE 'E'.
+    EXIT.
+  ENDIF.
+
+ENDFORM.

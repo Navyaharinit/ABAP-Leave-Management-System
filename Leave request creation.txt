@@ -1,0 +1,173 @@
+*&---------------------------------------------------------------------*
+*& Report  Z130_LEAVE_CREATE
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+REPORT z130_leave_create.
+
+TABLES: z130_leave_req,
+        z130_emp_master.
+
+PARAMETERS: p_emp  TYPE z130_emp_master-emp_number OBLIGATORY,
+            p_type TYPE z130_leave_req-leave_type OBLIGATORY,
+            p_sdt  TYPE z130_leave_req-start_date OBLIGATORY,
+            p_edt  TYPE z130_leave_req-end_date   OBLIGATORY,
+            p_res  TYPE z130_leave_req-reason     LOWER CASE.
+
+DATA: gv_days TYPE z130_leave_req-total_days.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_emp.
+  PERFORM f4_empno.
+
+AT SELECTION-SCREEN.
+  PERFORM validate_input.
+
+START-OF-SELECTION.
+  PERFORM create_leave_request.
+
+
+*&---------------------------------------------------------------------*
+*&      Form  F4_EMPNO
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM f4_empno .
+
+  TYPES: BEGIN OF ty_emp,
+           emp_number TYPE z130_emp_master-emp_number,
+           emp_first  TYPE z130_emp_master-emp_f_name,
+           emp_last   TYPE z130_emp_master-emp_l_name,
+           department TYPE z130_emp_master-emp_dept,
+         END OF ty_emp.
+
+  DATA: lt_emp TYPE TABLE OF ty_emp,
+        lt_ret TYPE TABLE OF ddshretval,
+        ls_ret TYPE ddshretval.
+
+  " Fetch real employee data
+  SELECT emp_number emp_f_name emp_l_name emp_dept
+    FROM z130_emp_master
+    INTO TABLE lt_emp
+    WHERE emp_number IS NOT Null.
+
+  IF lt_emp IS INITIAL.
+    MESSAGE 'No employees found in employee master' TYPE 'I'.
+    RETURN.
+  ENDIF.
+
+  CALL FUNCTION 'F4IF_INT_TABLE_VALUE_REQUEST'
+    EXPORTING
+      retfield    = 'EMP_NUMBER'
+      dynpprog    = sy-repid
+      dynpnr      = sy-dynnr
+      dynprofield = 'P_EMP'
+      value_org   = 'S'
+    TABLES
+      value_tab   = lt_emp
+      return_tab  = lt_ret.
+
+  " Put selected value back to screen parameter
+  READ TABLE lt_ret INTO ls_ret INDEX 1.
+  IF sy-subrc = 0.
+    p_emp = ls_ret-fieldval.
+  ENDIF.
+
+ENDFORM.
+
+
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_INPUT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM validate_input .
+
+  DATA: lv_found TYPE abap_bool.
+
+
+  "Employee must exist
+  SELECT SINGLE emp_number
+    FROM z130_emp_master
+    WHERE emp_number = @p_emp
+    INTO @lv_found.
+
+  IF lv_found IS INITIAL.
+    MESSAGE 'Employee number does not exist!' TYPE 'E'.
+  ENDIF.
+
+  "Date check
+  IF p_edt < p_sdt.
+    MESSAGE 'End date cannot be before start date!' TYPE 'E'.
+  ENDIF.
+  gv_days = p_edt - p_sdt + 1.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_LEAVE_REQUEST
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM create_leave_request.
+
+  DATA: ls_req  TYPE z130_leave_req,
+        lv_reqid TYPE z130_leave_req-req_id.
+
+ PERFORM generate_reqid CHANGING lv_reqid.
+
+  "=== Fill table fields from screen parameters ===
+  ls_req-req_id      = lv_reqid.
+  ls_req-emp_number  = p_emp.
+  ls_req-leave_type  = p_type.
+  ls_req-start_date  = p_sdt.
+  ls_req-end_date    = p_edt.
+  ls_req-total_days  = gv_days.
+  ls_req-reason      = p_res.
+  ls_req-status      = 'P'.       "Pending
+  ls_req-created_on  = sy-datum.
+
+  "=== Insert record into table ===
+  INSERT z130_leave_req FROM ls_req.
+
+  IF sy-subrc = 0.
+    MESSAGE |Leave Request { lv_reqid } created successfully| TYPE 'S'.
+  ELSE.
+    MESSAGE 'Error creating leave request' TYPE 'E'.
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  GENERATE_REQID
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      <--P_LV_REQID  text
+*----------------------------------------------------------------------*
+FORM generate_reqid CHANGING p_reqid TYPE z130_leave_req-req_id.
+
+  DATA lv_max TYPE z130_leave_req-req_id.
+
+  "Get the highest existing Request ID
+  SELECT MAX( req_id )
+    FROM z130_leave_req
+    INTO lv_max.
+
+  "If no records found, start at 1
+  IF lv_max IS INITIAL.
+    p_reqid = 1.
+  ELSE.
+    p_reqid = lv_max + 1.
+  ENDIF.
+
+ENDFORM.
+
